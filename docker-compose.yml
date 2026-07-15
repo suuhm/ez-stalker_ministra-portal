@@ -1,0 +1,66 @@
+services:
+  stalker-db:
+    image: mysql:5.7
+    container_name: stalker-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${STALKER_DB_PASSWORD}"
+      MYSQL_DATABASE: "stalker_db"
+    command: --sql-mode="NO_ENGINE_SUBSTITUTION"
+    volumes:
+      - stalker_db_data:/var/lib/mysql
+    networks:
+      - stalker-net
+
+  stalker-portal:
+    image: slaserx/stalker-portal:latest
+    container_name: stalker-portal
+    restart: unless-stopped
+    ports:
+      - "8080:88"
+    tty: true
+    stdin_open: true
+    depends_on:
+      - stalker-db
+    networks:
+      - stalker-net
+    entrypoint: >
+      bash -c "
+      echo '==> Stopping container-internal MySQL service...' &&
+      service mysql stop || true &&
+      echo '==> Waiting for external stalker-db container...' &&
+      until mysqladmin ping -h stalker-db -u root -p'${STALKER_DB_PASSWORD}' --silent; do sleep 1; done &&
+      echo '==> Patching config.ini precise parameters...' &&
+      sed -i 's/mysql_host = .*/mysql_host = stalker-db/g' /var/www/html/stalker_portal/server/config.ini &&
+      sed -i 's/mysql_db = .*/mysql_db = stalker_db/g' /var/www/html/stalker_portal/server/config.ini &&
+      sed -i 's/mysql_user = .*/mysql_user = root/g' /var/www/html/stalker_portal/server/config.ini &&
+      sed -i \"s/mysql_pass = .*/mysql_pass = ${STALKER_DB_PASSWORD}/g\" /var/www/html/stalker_portal/server/config.ini &&
+      echo '==> Forcing English locale in Admin Backend...' &&
+      sed -i 's/default_locale = .*/default_locale = en_GB.utf8/g' /var/www/html/stalker_portal/server/config.ini &&
+      echo '==> Forcing English language in STB Frontend (custom.ini)...' &&
+      touch /var/www/html/stalker_portal/server/custom.ini &&
+      sed -i 's/default_language = .*/default_language = en/g' /var/www/html/stalker_portal/server/custom.ini || true &&
+      echo 'default_language = en' >> /var/www/html/stalker_portal/server/custom.ini &&
+      echo '==> Patching Phing build.xml for external DB reachability...' &&
+      sed -i 's/mysql -u root -p/mysql -h stalker-db -u root -p${STALKER_DB_PASSWORD}/g' /var/www/html/stalker_portal/deploy/build.xml &&
+      sed -i 's/mysql -u root/mysql -h stalker-db -u root -p${STALKER_DB_PASSWORD}/g' /var/www/html/stalker_portal/deploy/build.xml &&
+      echo '==> Disabling Composer Online dependency enforcement...' &&
+      echo '{}' > /var/www/html/stalker_portal/deploy/composer.json &&
+      echo '{}' > /var/www/html/stalker_portal/deploy/ministra/composer.json &&
+      echo '==> Executing essential Phing deployment onto external DB...' &&
+      cd /var/www/html/stalker_portal/deploy && phing build || true &&
+      echo '==> Phing finished. Cleaning up background Apache processes...' &&
+      service apache2 stop || true &&
+      killall -9 apache2 || true &&
+      rm -f /var/run/apache2/apache2.pid || true &&
+      echo '==> Starting Apache permanently in foreground on port 88...' &&
+      echo '==> Connect on http://localhost:8080/stalker_portal/server/adm/ /w admin:1' &&
+      exec /usr/sbin/apache2ctl -D FOREGROUND
+      "
+
+networks:
+  stalker-net:
+    driver: bridge
+
+volumes:
+  stalker_db_data:
