@@ -1,0 +1,7 @@
+# Databases & Secrets
+.env
+stalker_db_data/
+
+# Logs & OS artifacts
+*.log
+.DS_Store
